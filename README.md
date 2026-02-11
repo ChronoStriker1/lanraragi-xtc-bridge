@@ -67,10 +67,10 @@ bun install
 ### 2. Configure server env
 
 ```bash
-cp /Users/chronostriker1/git/lanraragi-xtc-bridge/apps/server/.env.example /Users/chronostriker1/git/lanraragi-xtc-bridge/apps/server/.env
+cp apps/server/.env.example apps/server/.env
 ```
 
-Update values in `/Users/chronostriker1/git/lanraragi-xtc-bridge/apps/server/.env`:
+Update values in `apps/server/.env`:
 
 - `LANRARAGI_BASE_URL` (example: `http://localhost:3001`)
 - `LANRARAGI_API_KEY` (if your server requires one)
@@ -81,7 +81,7 @@ Update values in `/Users/chronostriker1/git/lanraragi-xtc-bridge/apps/server/.en
 Optional frontend env:
 
 ```bash
-cp /Users/chronostriker1/git/lanraragi-xtc-bridge/apps/web/.env.example /Users/chronostriker1/git/lanraragi-xtc-bridge/apps/web/.env
+cp apps/web/.env.example apps/web/.env
 ```
 
 ### 3. Run dev
