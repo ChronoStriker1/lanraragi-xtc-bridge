@@ -1,0 +1,26 @@
+{
+  "name": "@lrr-xtc/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.8",
+    "dotenv": "^16.4.7",
+    "hono": "^4.7.2",
+    "p-limit": "^6.2.0",
+    "yazl": "^2.5.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/yazl": "^2.4.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules
+package-lock.json
+npm-shrinkwrap.json
+.env
+.env.*
+!.env.example
+*.log
+*.out
+dist
+build
+coverage
+.DS_Store
+xtc_output
+.temp_png
+.tmp
+*.tsbuildinfo

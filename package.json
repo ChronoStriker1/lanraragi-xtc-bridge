@@ -1,0 +1,20 @@
+{
+  "name": "lanraragi-xtc-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.2.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"bun run dev:server\" \"bun run dev:web\"",
+    "dev:server": "bun run --cwd apps/server dev",
+    "dev:web": "bun run --cwd apps/web dev",
+    "build": "bun run --cwd apps/server build && bun run --cwd apps/web build",
+    "typecheck": "bun run --cwd apps/server typecheck && bun run --cwd apps/web typecheck",
+    "lint": "echo \"No lint scripts configured\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
