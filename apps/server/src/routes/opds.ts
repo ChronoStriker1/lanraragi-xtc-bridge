@@ -90,7 +90,7 @@ function renderArchiveEntry(config: AppConfig, arc: ArchiveRecord): string {
   const summary = xmlEscape(arc.summary || "");
   const tags = xmlEscape(arc.tags || "");
   const thumb = `${baseUrl(config)}/api/archives/${id}/thumbnail`;
-  const download = `${baseUrl(config)}/opds/download/${id}.xtc`;
+  const download = `${baseUrl(config)}/opds/download/${id}`;
   const updatedAt = opdsDateFromUnix(arc.lastreadtime);
 
   return `<entry>
@@ -103,6 +103,15 @@ function renderArchiveEntry(config: AppConfig, arc: ArchiveRecord): string {
     <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="${xmlEscape(download)}"/>
     <link rel="http://opds-spec.org/acquisition" type="application/octet-stream" href="${xmlEscape(download)}"/>
   </entry>`;
+}
+
+function resolveDownloadArchiveId(path: string, rawParamId?: string): string | null {
+  const direct = (rawParamId ?? "").trim().replace(/\.xtc$/i, "");
+  if (direct) return decodeURIComponent(direct);
+
+  const m = path.match(/\/download\/([^/]+?)(?:\.xtc)?$/i);
+  if (!m || !m[1]) return null;
+  return decodeURIComponent(m[1]);
 }
 
 function bucketForFacetName(name: string): string {
@@ -498,8 +507,8 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
     });
   });
 
-  app.get("/download/:id.xtc", async (c) => {
-    const id = c.req.param("id");
+  const handleDownload = async (c: any) => {
+    const id = resolveDownloadArchiveId(c.req.path, c.req.param("id"));
     if (!id) return c.text("Missing archive id", 400);
 
     const artifact = await convertArchiveToXtc({
@@ -516,7 +525,10 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         void artifact.dispose();
       },
     });
-  });
+  };
+
+  app.get("/download/:id", handleDownload);
+  app.get("/download/:id.xtc", handleDownload);
 
   return app;
 }
