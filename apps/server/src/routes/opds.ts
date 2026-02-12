@@ -89,8 +89,8 @@ function renderArchiveEntry(config: AppConfig, arc: ArchiveRecord): string {
   const title = xmlEscape(arc.title || arc.filename || arc.arcid);
   const summary = xmlEscape(arc.summary || "");
   const tags = xmlEscape(arc.tags || "");
-  const thumb = `${baseUrl(config)}/api/archives/${id}/thumbnail`;
-  const download = `${baseUrl(config)}/opds/download/${id}`;
+  const thumb = `/api/archives/${id}/thumbnail`;
+  const download = `/opds/download/${id}`;
   const updatedAt = opdsDateFromUnix(arc.lastreadtime);
 
   return `<entry>
@@ -161,7 +161,7 @@ async function renderArchiveListFeed(params: {
       renderNavigationEntry({
         id: `${baseUrl(params.config)}${params.feedPath}#home`,
         title: "Back to OPDS Home",
-        href: `${baseUrl(params.config)}/opds`,
+        href: "/opds",
       }),
     );
   }
@@ -170,7 +170,7 @@ async function renderArchiveListFeed(params: {
       renderNavigationEntry({
         id: `${baseUrl(params.config)}${params.feedPath}#prev-${params.page - 1}`,
         title: "Previous Page",
-        href: `${baseUrl(params.config)}${params.feedPath}${qs({
+        href: `${params.feedPath}${qs({
           q: params.q,
           title: params.title,
           page: params.page - 1,
@@ -186,7 +186,7 @@ async function renderArchiveListFeed(params: {
       renderNavigationEntry({
         id: `${baseUrl(params.config)}${params.feedPath}#next-${params.page + 1}`,
         title: "Next Page",
-        href: `${baseUrl(params.config)}${params.feedPath}${qs({
+        href: `${params.feedPath}${qs({
           q: params.q,
           title: params.title,
           page: params.page + 1,
@@ -298,7 +298,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
           id: `${baseUrl(config)}/opds/nav/recent`,
           title: "Recently Added",
           summary: "Newest archives first",
-          href: `${baseUrl(config)}/opds/list${qs({
+          href: `/opds/list${qs({
             title: "Recently Added",
             page: 1,
             pageSize: 30,
@@ -309,7 +309,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/nav/title-asc`,
           title: "Titles A-Z",
-          href: `${baseUrl(config)}/opds/list${qs({
+          href: `/opds/list${qs({
             title: "Titles A-Z",
             page: 1,
             pageSize: 30,
@@ -320,7 +320,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/nav/title-desc`,
           title: "Titles Z-A",
-          href: `${baseUrl(config)}/opds/list${qs({
+          href: `/opds/list${qs({
             title: "Titles Z-A",
             page: 1,
             pageSize: 30,
@@ -331,12 +331,12 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/nav/artists`,
           title: "Browse by Artist",
-          href: `${baseUrl(config)}/opds/facets/artist`,
+          href: "/opds/facets/artist",
         }),
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/nav/groups`,
           title: "Browse by Group",
-          href: `${baseUrl(config)}/opds/facets/group`,
+          href: "/opds/facets/group",
         }),
       ],
     });
@@ -398,7 +398,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/facets/${namespace}#home`,
           title: "Back to OPDS Home",
-          href: `${baseUrl(config)}/opds`,
+          href: "/opds",
         }),
       ];
 
@@ -409,7 +409,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
           renderNavigationEntry({
             id: `${baseUrl(config)}/opds/facets/${namespace}#${bucket}`,
             title: `${bucket} (${count})`,
-            href: `${baseUrl(config)}/opds/facets/${namespace}${qs({ letter: bucket, page: 1, pageSize: 40 })}`,
+            href: `/opds/facets/${namespace}${qs({ letter: bucket, page: 1, pageSize: 40 })}`,
           }),
         );
       }
@@ -437,7 +437,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
       renderNavigationEntry({
         id: `${baseUrl(config)}/opds/facets/${namespace}#letters`,
         title: `Back to ${titleBase} A-Z`,
-        href: `${baseUrl(config)}/opds/facets/${namespace}`,
+        href: `/opds/facets/${namespace}`,
       }),
     ];
 
@@ -446,7 +446,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/facets/${namespace}#prev-${letter}-${parsed.data.page - 1}`,
           title: "Previous Page",
-          href: `${baseUrl(config)}/opds/facets/${namespace}${qs({
+          href: `/opds/facets/${namespace}${qs({
             letter,
             page: parsed.data.page - 1,
             pageSize: parsed.data.pageSize,
@@ -459,7 +459,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/facets/${namespace}#next-${letter}-${parsed.data.page + 1}`,
           title: "Next Page",
-          href: `${baseUrl(config)}/opds/facets/${namespace}${qs({
+          href: `/opds/facets/${namespace}${qs({
             letter,
             page: parsed.data.page + 1,
             pageSize: parsed.data.pageSize,
@@ -473,7 +473,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/facets/${namespace}/${encodeURIComponent(facet.name)}`,
           title: `${facet.name} (${facet.count})`,
-          href: `${baseUrl(config)}/opds/list${qs({
+          href: `/opds/list${qs({
             q: `${namespace}:${facet.name}`,
             title: `${titleBase.slice(0, -1)}: ${facet.name}`,
             page: 1,
