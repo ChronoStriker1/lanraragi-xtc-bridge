@@ -4,7 +4,8 @@ import https from "node:https";
 import { URL } from "node:url";
 
 type QueryValue = string | number | boolean | undefined | null;
-const DEVICE_REQUEST_TIMEOUT_MS = 120_000;
+const DEVICE_REQUEST_TIMEOUT_MS = 20_000;
+const DEVICE_UPLOAD_TIMEOUT_MS = 600_000;
 
 export type XteinkFileEntry = {
   name: string;
@@ -28,6 +29,11 @@ export function normalizeDevicePath(input: string): string {
   if (!trimmed || trimmed === ".") return "/";
   const withRoot = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   return withRoot.replace(/\/+/g, "/");
+}
+
+function joinDevicePath(basePath: string, leaf: string): string {
+  const cleanLeaf = leaf.replace(/^\/+/, "");
+  return normalizeDevicePath(`${normalizeDevicePath(basePath)}/${cleanLeaf}`);
 }
 
 export class XteinkClient {
@@ -54,6 +60,7 @@ export class XteinkClient {
     query?: Record<string, QueryValue>;
     headers?: Record<string, string>;
     body?: Buffer;
+    timeoutMs?: number;
   }): Promise<{ status: number; body: string }> {
     const url = new URL(this.buildUrl(params.pathname, params.query));
     const isHttps = url.protocol === "https:";
@@ -86,8 +93,8 @@ export class XteinkClient {
         },
       );
 
-      req.setTimeout(DEVICE_REQUEST_TIMEOUT_MS, () => {
-        req.destroy(new Error("Device request timed out"));
+      req.setTimeout(params.timeoutMs ?? DEVICE_REQUEST_TIMEOUT_MS, () => {
+        req.destroy(new Error(`Device request timed out (${params.method} ${url.pathname}${url.search})`));
       });
 
       req.on("error", (error) => reject(error));
@@ -171,14 +178,17 @@ export class XteinkClient {
     }
   }
 
-  async uploadFile(params: { filePath: string; fileName: string; targetPath: string }): Promise<void> {
+  private async uploadFileOnce(params: { filePath: string; fileName: string; targetPath: string }): Promise<{
+    status: number;
+    body: string;
+  }> {
     const bytes = await readFile(params.filePath);
     const multipart = this.buildMultipart([], {
       fileName: params.fileName,
       bytes,
     });
 
-    const response = await this.request({
+    return this.request({
       method: "POST",
       pathname: "/upload",
       query: { path: normalizeDevicePath(params.targetPath) },
@@ -186,9 +196,58 @@ export class XteinkClient {
         "content-type": `multipart/form-data; boundary=${multipart.boundary}`,
       },
       body: multipart.body,
+      timeoutMs: DEVICE_UPLOAD_TIMEOUT_MS,
     });
+  }
+
+  async deletePath(rawPath: string, type: "file" | "folder" = "file"): Promise<void> {
+    const multipart = this.buildMultipart([
+      { name: "path", value: normalizeDevicePath(rawPath) },
+      { name: "type", value: type },
+    ]);
+
+    const response = await this.request({
+      method: "POST",
+      pathname: "/delete",
+      headers: {
+        "content-type": `multipart/form-data; boundary=${multipart.boundary}`,
+      },
+      body: multipart.body,
+    });
+
     if (response.status < 200 || response.status >= 300) {
-      throw new Error(`Device upload failed (${response.status}): ${response.body.slice(0, 200)}`);
+      throw new Error(`Device delete failed (${response.status}): ${response.body.slice(0, 200)}`);
+    }
+  }
+
+  async uploadFile(params: { filePath: string; fileName: string; targetPath: string }): Promise<void> {
+    const firstAttempt = await this.uploadFileOnce(params);
+    if (firstAttempt.status >= 200 && firstAttempt.status < 300) {
+      return;
+    }
+
+    const conflictLike =
+      firstAttempt.status === 409 ||
+      firstAttempt.status === 412 ||
+      /(already exists|exists|duplicate|conflict)/i.test(firstAttempt.body);
+
+    if (!conflictLike) {
+      throw new Error(`Device upload failed (${firstAttempt.status}): ${firstAttempt.body.slice(0, 200)}`);
+    }
+
+    const filePath = joinDevicePath(params.targetPath, params.fileName);
+    try {
+      await this.deletePath(filePath, "file");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown device delete error";
+      throw new Error(
+        `Device upload failed (${firstAttempt.status}): ${firstAttempt.body.slice(0, 200)}; overwrite retry failed (${reason})`,
+      );
+    }
+
+    const retry = await this.uploadFileOnce(params);
+    if (retry.status < 200 || retry.status >= 300) {
+      throw new Error(`Device upload retry failed (${retry.status}): ${retry.body.slice(0, 200)}`);
     }
   }
 }

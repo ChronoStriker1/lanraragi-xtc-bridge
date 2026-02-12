@@ -7,6 +7,7 @@ const envSchema = z.object({
   LANRARAGI_BASE_URL: z.string().url(),
   LANRARAGI_API_KEY: z.string().optional().default(""),
   XTEINK_BASE_URL: z.string().url().default("http://xteink.local"),
+  DEVICE_SETTINGS_FILE: z.string().default(".runtime/device-settings.json"),
   CBZ2XTC_PATH: z.string().min(1),
   PNG2XTC_PATH: z.string().optional().default(""),
   PYTHON_BIN: z.string().default("python3"),

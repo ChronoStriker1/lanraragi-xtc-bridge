@@ -2,14 +2,26 @@ import "dotenv/config";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import path from "node:path";
 import { loadConfig } from "./lib/config";
-import { LanraragiClient } from "./lib/lanraragi-client";
+import { createDeviceConnectionManager } from "./lib/device-connection";
+import { createLanraragiConnectionManager } from "./lib/lanraragi-connection";
 import { createApiRouter } from "./routes/api";
 import { createOpdsRouter } from "./routes/opds";
 import { getLogFilePath, logError, logInfo } from "./lib/logger";
 
 const config = loadConfig();
-const lrr = new LanraragiClient(config.LANRARAGI_BASE_URL, config.LANRARAGI_API_KEY);
+const lanraragi = createLanraragiConnectionManager({
+  baseUrl: config.LANRARAGI_BASE_URL,
+  apiKey: config.LANRARAGI_API_KEY,
+});
+const device = createDeviceConnectionManager({
+  baseUrl: config.XTEINK_BASE_URL,
+  path: "/",
+  filePath: path.isAbsolute(config.DEVICE_SETTINGS_FILE)
+    ? config.DEVICE_SETTINGS_FILE
+    : path.resolve(process.cwd(), config.DEVICE_SETTINGS_FILE),
+});
 
 const app = new Hono();
 
@@ -35,8 +47,8 @@ app.get("/", (c) =>
   }),
 );
 
-app.route("/api", createApiRouter(config, lrr));
-app.route("/opds", createOpdsRouter(config, lrr));
+app.route("/api", createApiRouter(config, lanraragi, device));
+app.route("/opds", createOpdsRouter(config, lanraragi));
 
 serve(
   {

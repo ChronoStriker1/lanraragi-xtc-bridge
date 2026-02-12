@@ -13,12 +13,18 @@ import type { ConversionSettings } from "../types";
 import { logError, logInfo } from "./logger";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"]);
-const PAGE_FETCH_RETRY_ATTEMPTS = 3;
-const PAGE_FETCH_RETRY_DELAY_MS = 300;
+const PAGE_FETCH_RETRY_ATTEMPTS = 5;
+const PAGE_FETCH_RETRY_DELAY_MS = 500;
 const FRAME_POLL_INTERVAL_MS = 500;
 const FRAME_MIN_AGE_MS = 350;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const PNG_IEND_CHUNK = Buffer.from([0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+const GLOBAL_PAGE_FETCH_CONCURRENCY = (() => {
+  const raw = Number(process.env.GLOBAL_PAGE_FETCH_CONCURRENCY || "8");
+  if (!Number.isFinite(raw) || raw < 1) return 8;
+  return Math.min(16, Math.floor(raw));
+})();
+const globalPageFetchLimit = pLimit(GLOBAL_PAGE_FETCH_CONCURRENCY);
 
 export type ConversionProgressEvent =
   | { type: "stage"; stage: string; message: string }
@@ -225,6 +231,8 @@ async function downloadPageWithRetry(params: {
   lrr: LanraragiClient;
   pageUrl: string;
   pageNumber: number;
+  totalPages: number;
+  archiveId: string;
 }): Promise<Response> {
   let lastError: unknown;
 
@@ -241,8 +249,9 @@ async function downloadPageWithRetry(params: {
     } catch (error) {
       lastError = error;
       if (attempt < PAGE_FETCH_RETRY_ATTEMPTS) {
+        const reason = error instanceof Error ? error.message : String(error);
         logInfo(
-          `page fetch retry id-page=${params.pageNumber} attempt=${attempt + 1}/${PAGE_FETCH_RETRY_ATTEMPTS}`,
+          `page fetch retry id=${params.archiveId} page=${params.pageNumber}/${params.totalPages} attempt=${attempt + 1}/${PAGE_FETCH_RETRY_ATTEMPTS} reason=${reason.slice(0, 160)}`,
         );
         await sleep(PAGE_FETCH_RETRY_DELAY_MS * attempt);
         continue;
@@ -250,7 +259,12 @@ async function downloadPageWithRetry(params: {
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error(`Failed to fetch page ${params.pageNumber}`);
+  if (lastError instanceof Error) {
+    throw new Error(
+      `Failed to fetch page ${params.pageNumber}/${params.totalPages} for archive ${params.archiveId}: ${lastError.message}`,
+    );
+  }
+  throw new Error(`Failed to fetch page ${params.pageNumber}/${params.totalPages} for archive ${params.archiveId}`);
 }
 
 async function getArchivePagesRobust(params: {
@@ -390,6 +404,7 @@ async function createCbzFromPages(params: {
   pages: string[];
   lrr: LanraragiClient;
   archivePath: string;
+  archiveId: string;
   concurrency: number;
   pythonBin: string;
   prependPortraitCoverForLandscape?: boolean;
@@ -404,11 +419,15 @@ async function createCbzFromPages(params: {
     params.pages.map((pageUrl, index) =>
       limit(async () => {
         const pageNumber = index + 1;
-        const response = await downloadPageWithRetry({
-          lrr: params.lrr,
-          pageUrl,
-          pageNumber,
-        });
+        const response = await globalPageFetchLimit(() =>
+          downloadPageWithRetry({
+            lrr: params.lrr,
+            pageUrl,
+            pageNumber,
+            totalPages: params.pages.length,
+            archiveId: params.archiveId,
+          }),
+        );
         const inferredExt = inferPageExtension(response, pageUrl);
 
         const fileName = `${String(pageNumber).padStart(5, "0")}${inferredExt}`;
@@ -802,6 +821,7 @@ export async function convertArchiveToXtc(params: {
           pages: pagesForBuild,
           lrr: params.lrr,
           archivePath: archiveInputPath,
+          archiveId: params.archiveId,
           concurrency: params.config.PAGE_FETCH_CONCURRENCY,
           pythonBin: params.config.PYTHON_BIN,
           prependPortraitCoverForLandscape,
@@ -837,6 +857,7 @@ export async function convertArchiveToXtc(params: {
           pages: pagesForBuild,
           lrr: params.lrr,
           archivePath: archiveInputPath,
+          archiveId: params.archiveId,
           concurrency: params.config.PAGE_FETCH_CONCURRENCY,
           pythonBin: params.config.PYTHON_BIN,
           prependPortraitCoverForLandscape,
@@ -868,6 +889,7 @@ export async function convertArchiveToXtc(params: {
             pages: pagesForBuild,
             lrr: params.lrr,
             archivePath: archiveInputPath,
+            archiveId: params.archiveId,
             concurrency: params.config.PAGE_FETCH_CONCURRENCY,
             pythonBin: params.config.PYTHON_BIN,
             prependPortraitCoverForLandscape,
@@ -893,6 +915,7 @@ export async function convertArchiveToXtc(params: {
         pages: pagesForBuild,
         lrr: params.lrr,
         archivePath: archiveInputPath,
+        archiveId: params.archiveId,
         concurrency: params.config.PAGE_FETCH_CONCURRENCY,
         pythonBin: params.config.PYTHON_BIN,
         prependPortraitCoverForLandscape,

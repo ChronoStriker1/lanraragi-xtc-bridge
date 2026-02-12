@@ -6,7 +6,8 @@ import { getConversionJob, getConversionJobFrame, startConversionJob, takeJobArt
 import { streamFileAsResponse } from "../lib/http";
 import { defaultConversionSettings } from "../lib/settings";
 import type { AppConfig } from "../lib/config";
-import { LanraragiClient } from "../lib/lanraragi-client";
+import type { DeviceConnectionManager } from "../lib/device-connection";
+import type { LanraragiConnectionManager } from "../lib/lanraragi-connection";
 import { logError, logInfo } from "../lib/logger";
 import { XteinkClient, normalizeDeviceBaseUrl, normalizeDevicePath } from "../lib/xteink-client";
 
@@ -59,18 +60,28 @@ const convertBodySchema = z.object({
 
 const deviceFilesQuerySchema = z.object({
   baseUrl: z.string().optional(),
-  path: z.string().optional().default("/"),
+  path: z.string().optional(),
 });
 
 const deviceMkdirBodySchema = z.object({
   baseUrl: z.string().optional(),
-  path: z.string().optional().default("/"),
+  path: z.string().optional(),
   name: z.string().min(1).max(120),
 });
 
 const uploadJobBodySchema = z.object({
   baseUrl: z.string().optional(),
-  path: z.string().optional().default("/"),
+  path: z.string().optional(),
+});
+
+const lanraragiSettingsBodySchema = z.object({
+  baseUrl: z.string().optional(),
+  apiKey: z.string().optional(),
+});
+
+const deviceSettingsBodySchema = z.object({
+  baseUrl: z.string().optional(),
+  path: z.string().optional(),
 });
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -92,16 +103,29 @@ function resolveSettings(input?: z.infer<typeof conversionSettingsSchema>) {
   };
 }
 
-export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
+export function createApiRouter(
+  config: AppConfig,
+  lanraragi: LanraragiConnectionManager,
+  device: DeviceConnectionManager,
+): Hono {
   const app = new Hono();
   const facetCache = new Map<"artist" | "group", { at: number; items: Array<{ name: string; count: number }> }>();
   let tagCache: { at: number; items: string[] } | null = null;
   const FACET_CACHE_MS = 5 * 60 * 1000;
   const TAG_CACHE_MS = 5 * 60 * 1000;
+  let cacheVersion = lanraragi.getVersion();
+
+  const ensureCachesFresh = () => {
+    const currentVersion = lanraragi.getVersion();
+    if (currentVersion === cacheVersion) return;
+    facetCache.clear();
+    tagCache = null;
+    cacheVersion = currentVersion;
+  };
 
   app.get("/health", async (c) => {
     try {
-      const info = await lrr.ping();
+      const info = await lanraragi.getClient().ping();
       return c.json({ ok: true, lanraragi: info });
     } catch (error) {
       return c.json(
@@ -118,10 +142,77 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
     return c.json({ settings: defaultConversionSettings });
   });
 
-  app.get("/device/defaults", (c) => {
+  app.get("/lanraragi/settings", (c) => {
     return c.json({
-      baseUrl: config.XTEINK_BASE_URL,
-      path: "/",
+      settings: lanraragi.getSettings(),
+    });
+  });
+
+  app.post("/lanraragi/settings", async (c) => {
+    const bodyJson = await c.req.json().catch(() => ({}));
+    const parsed = lanraragiSettingsBodySchema.safeParse(bodyJson);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    const hasAnySetting = parsed.data.baseUrl !== undefined || parsed.data.apiKey !== undefined;
+    if (!hasAnySetting) {
+      return c.json({ error: "No LANraragi settings provided." }, 400);
+    }
+
+    let settings: ReturnType<LanraragiConnectionManager["getSettings"]>;
+    try {
+      settings = lanraragi.updateSettings({
+        baseUrl: parsed.data.baseUrl,
+        apiKey: parsed.data.apiKey,
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Invalid LANraragi settings." }, 400);
+    }
+    ensureCachesFresh();
+
+    return c.json({
+      ok: true,
+      settings,
+    });
+  });
+
+  app.get("/device/defaults", (c) => {
+    const settings = device.getSettings();
+    return c.json(settings);
+  });
+
+  app.get("/device/settings", (c) => {
+    return c.json({
+      settings: device.getSettings(),
+    });
+  });
+
+  app.post("/device/settings", async (c) => {
+    const bodyJson = await c.req.json().catch(() => ({}));
+    const parsed = deviceSettingsBodySchema.safeParse(bodyJson);
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    const hasAnySetting = parsed.data.baseUrl !== undefined || parsed.data.path !== undefined;
+    if (!hasAnySetting) {
+      return c.json({ error: "No device settings provided." }, 400);
+    }
+
+    let settings: ReturnType<DeviceConnectionManager["getSettings"]>;
+    try {
+      settings = device.updateSettings({
+        baseUrl: parsed.data.baseUrl,
+        path: parsed.data.path,
+      });
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : "Invalid device settings." }, 400);
+    }
+
+    return c.json({
+      ok: true,
+      settings,
     });
   });
 
@@ -131,13 +222,14 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
       return c.json({ error: parsed.error.flatten() }, 400);
     }
 
+    const defaults = device.getSettings();
     let baseUrl: string;
     try {
-      baseUrl = normalizeDeviceBaseUrl(parsed.data.baseUrl || config.XTEINK_BASE_URL);
+      baseUrl = normalizeDeviceBaseUrl(parsed.data.baseUrl || defaults.baseUrl);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : "Invalid device URL" }, 400);
     }
-    const devicePath = normalizeDevicePath(parsed.data.path || "/");
+    const devicePath = normalizeDevicePath(parsed.data.path || defaults.path);
     const client = new XteinkClient(baseUrl);
     const files = await client.listFiles(devicePath);
     return c.json({
@@ -154,13 +246,14 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
       return c.json({ error: parsed.error.flatten() }, 400);
     }
 
+    const defaults = device.getSettings();
     let baseUrl: string;
     try {
-      baseUrl = normalizeDeviceBaseUrl(parsed.data.baseUrl || config.XTEINK_BASE_URL);
+      baseUrl = normalizeDeviceBaseUrl(parsed.data.baseUrl || defaults.baseUrl);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : "Invalid device URL" }, 400);
     }
-    const devicePath = normalizeDevicePath(parsed.data.path || "/");
+    const devicePath = normalizeDevicePath(parsed.data.path || defaults.path);
     const client = new XteinkClient(baseUrl);
     await client.createFolder(devicePath, parsed.data.name);
 
@@ -173,12 +266,13 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
   });
 
   app.get("/archives", async (c) => {
+    ensureCachesFresh();
     const parsed = archiveQuerySchema.safeParse(c.req.query());
     if (!parsed.success) {
       return c.json({ error: parsed.error.flatten() }, 400);
     }
 
-    const data = await lrr.searchArchives({
+    const data = await lanraragi.getClient().searchArchives({
       filter: parsed.data.q ?? "",
       start: parsed.data.start,
       sortby: parsed.data.sortby,
@@ -189,6 +283,7 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
   });
 
   app.get("/facets", async (c) => {
+    ensureCachesFresh();
     const parsed = facetsQuerySchema.safeParse(c.req.query());
     if (!parsed.success) {
       return c.json({ error: parsed.error.flatten() }, 400);
@@ -202,7 +297,7 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
     if (cached && now - cached.at < FACET_CACHE_MS) {
       items = cached.items;
     } else {
-      const stats = await lrr.getTagStats(1);
+      const stats = await lanraragi.getClient().getTagStats(1);
       items = stats
         .filter((entry) => entry.namespace === namespace)
         .map((entry) => ({
@@ -224,6 +319,7 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
   });
 
   app.get("/tags/suggest", async (c) => {
+    ensureCachesFresh();
     const parsed = tagSuggestQuerySchema.safeParse(c.req.query());
     if (!parsed.success) {
       return c.json({ error: parsed.error.flatten() }, 400);
@@ -234,7 +330,7 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
     if (tagCache && now - tagCache.at < TAG_CACHE_MS) {
       items = tagCache.items;
     } else {
-      const stats = await lrr.getTagStats(1);
+      const stats = await lanraragi.getClient().getTagStats(1);
       items = stats
         .map((entry) => (entry.namespace ? `${entry.namespace}:${entry.text}` : entry.text))
         .filter((value) => value.trim().length > 0)
@@ -257,10 +353,11 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
   });
 
   app.get("/archives/:id/thumbnail", async (c) => {
+    ensureCachesFresh();
     const id = c.req.param("id");
     if (!id) return c.json({ error: "Missing archive id" }, 400);
 
-    const response = await lrr.getArchiveThumbnail(id);
+    const response = await lanraragi.getClient().getArchiveThumbnail(id);
     return new Response(response.body, {
       status: 200,
       headers: {
@@ -271,12 +368,13 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
   });
 
   app.get("/archives/:id/page", async (c) => {
+    ensureCachesFresh();
     const id = c.req.param("id");
     if (!id) return c.json({ error: "Missing archive id" }, 400);
     const pagePath = c.req.query("path");
     if (!pagePath) return c.json({ error: "Missing page path" }, 400);
 
-    const response = await lrr.getArchivePage(id, pagePath);
+    const response = await lanraragi.getClient().getArchivePage(id, pagePath);
     return new Response(response.body, {
       status: 200,
       headers: {
@@ -287,8 +385,9 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
   });
 
   app.get("/archives/:id", async (c) => {
+    ensureCachesFresh();
     const id = c.req.param("id");
-    const metadata = await lrr.getArchiveMetadata(id);
+    const metadata = await lanraragi.getClient().getArchiveMetadata(id);
     return c.json(metadata);
   });
 
@@ -307,7 +406,7 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
 
     const artifact = await convertArchiveToXtc({
       config,
-      lrr,
+      lrr: lanraragi.getClient(),
       archiveId: id,
       settings,
     });
@@ -334,7 +433,7 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
     const settings = resolveSettings(parsedBody.data.settings);
     const job = startConversionJob({
       config,
-      lrr,
+      lrr: lanraragi.getClient(),
       archiveId: id,
       settings,
     });
@@ -419,27 +518,45 @@ export function createApiRouter(config: AppConfig, lrr: LanraragiClient): Hono {
     }
 
     let baseUrl: string;
+    const defaults = device.getSettings();
     try {
-      baseUrl = normalizeDeviceBaseUrl(parsedBody.data.baseUrl || config.XTEINK_BASE_URL);
+      baseUrl = normalizeDeviceBaseUrl(parsedBody.data.baseUrl || defaults.baseUrl);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : "Invalid device URL" }, 400);
     }
-    const devicePath = normalizeDevicePath(parsedBody.data.path || "/");
-    const device = new XteinkClient(baseUrl);
+    const devicePath = normalizeDevicePath(parsedBody.data.path || defaults.path);
+    const deviceClient = new XteinkClient(baseUrl);
+    const uploadStartAt = Date.now();
+    const artifactName = artifact.downloadName || `${jobId}.xtc`;
+    logInfo(
+      `upload start job=${jobId} file=${artifactName} size=${artifact.fileSize} target=${baseUrl}${devicePath}`,
+    );
 
     try {
-      await device.uploadFile({
+      await deviceClient.uploadFile({
         filePath: artifact.filePath,
-        fileName: artifact.downloadName,
+        fileName: artifactName,
         targetPath: devicePath,
       });
+      const elapsedMs = Date.now() - uploadStartAt;
+      logInfo(
+        `upload done job=${jobId} file=${artifactName} size=${artifact.fileSize} target=${baseUrl}${devicePath} elapsed_ms=${elapsedMs}`,
+      );
       return c.json({
         ok: true,
         baseUrl,
         path: devicePath,
-        fileName: artifact.downloadName,
+        fileName: artifactName,
         fileSize: artifact.fileSize,
       });
+    } catch (error) {
+      const elapsedMs = Date.now() - uploadStartAt;
+      logError(
+        `upload failed job=${jobId} file=${artifactName} size=${artifact.fileSize} target=${baseUrl}${devicePath} elapsed_ms=${elapsedMs} error=${
+          error instanceof Error ? error.message : "Unknown upload error"
+        }`,
+      );
+      throw error;
     } finally {
       await artifact.dispose();
     }

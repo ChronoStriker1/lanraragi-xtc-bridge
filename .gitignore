@@ -13,5 +13,6 @@ coverage
 xtc_output
 .temp_png
 .tmp
+.runtime
 /tools/
 *.tsbuildinfo
