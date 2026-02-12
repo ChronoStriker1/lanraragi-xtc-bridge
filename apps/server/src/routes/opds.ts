@@ -81,6 +81,7 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
     <summary>${summary}</summary>
     <category term="tags" label="${tags}"/>
     <link rel="http://opds-spec.org/image/thumbnail" type="image/jpeg" href="${xmlEscape(thumb)}"/>
+    <link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="${xmlEscape(download)}"/>
     <link rel="http://opds-spec.org/acquisition" type="application/octet-stream" href="${xmlEscape(download)}"/>
   </entry>`;
     })
