@@ -16,5 +16,12 @@ xtc_output
 .runtime
 /data/
 /docker/server.env
-/tools/
+# Keep only required vendored tool scripts for Docker/runtime conversion.
+/tools/*
+!/tools/cbz2xtc/
+/tools/cbz2xtc/*
+!/tools/cbz2xtc/cbz2xtc.py
+!/tools/epub2xtc/
+/tools/epub2xtc/*
+!/tools/epub2xtc/png2xtc.py
 *.tsbuildinfo

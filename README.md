@@ -93,6 +93,15 @@ The default profile matches `xtcjs` XTEink-focused settings:
 - `cbz2xtc.py` ([tazua/cbz2xtc](https://github.com/tazua/cbz2xtc))
 - `png2xtc.py` ([jonasdiemer/epub2xtc](https://github.com/jonasdiemer/epub2xtc))
 
+## Upstream Tool Sources
+
+This repository vendors the minimum required conversion scripts under `tools/`:
+
+- `tools/cbz2xtc/cbz2xtc.py` from [tazua/cbz2xtc](https://github.com/tazua/cbz2xtc)
+- `tools/epub2xtc/png2xtc.py` from [jonasdiemer/epub2xtc](https://github.com/jonasdiemer/epub2xtc)
+
+The Docker image and runtime conversion flow rely on these two scripts being present in-repo.
+
 ## Setup
 
 ### 1. Install dependencies
