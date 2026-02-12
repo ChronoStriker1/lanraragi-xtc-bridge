@@ -15,6 +15,7 @@ import sys
 import zipfile
 import shutil
 import subprocess
+import inspect
 from pathlib import Path
 from PIL import Image, ImageOps, ImageDraw, ImageFont
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -27,6 +28,19 @@ TARGET_HEIGHT = 800
 
 # Global flag for dithering (default True)
 USE_DITHERING = True
+
+
+def autocontrast_compat(img, cutoff):
+    """
+    Pillow compatibility wrapper.
+    Newer Pillow supports preserve_tone=True; older versions do not.
+    """
+    try:
+        if "preserve_tone" in inspect.signature(ImageOps.autocontrast).parameters:
+            return ImageOps.autocontrast(img, cutoff=cutoff, preserve_tone=True)
+    except Exception:
+        pass
+    return ImageOps.autocontrast(img, cutoff=cutoff)
 
 
 def find_png2xtc():
@@ -120,7 +134,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 while contrast_set < 9:
                     black_cutoff = 3 * contrast_set
                     white_cutoff = 3 + 9 * contrast_set
-                    page_view = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
+                    page_view = autocontrast_compat(uncropped_img, cutoff=(black_cutoff, white_cutoff))
                     draw = ImageDraw.Draw(page_view)
                     draw.rounded_rectangle(box_position, radius=60, fill=box_color, outline=text_color, width=6, corners=(False,True,False,True))
                     draw.text(text_position, f"Contrast {contrast_set}", fill=text_color, font=font)
@@ -132,7 +146,7 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                     save_with_padding(middle_rotated, output_middle, padcolor=PADDING_COLOR)
                     contrast_set += 1
                 crop_set = 0.0
-                contrast3img = ImageOps.autocontrast(uncropped_img, cutoff=(9,30), preserve_tone=True)
+                contrast3img = autocontrast_compat(uncropped_img, cutoff=(9, 30))
                 while crop_set < 10:
                     allaroundcrop = crop_set
                     page_view = contrast3img.crop((int(allaroundcrop/100.0*width), int(allaroundcrop/100.0*height), width-int(allaroundcrop/100.0*width), height-int(allaroundcrop/100.0*height)))
@@ -155,18 +169,18 @@ def optimize_image(img_data, output_path_base, page_num, suffix=""):
                 #passed a list of 2, first is dark cutoff, second is bright cutoff.
                 black_cutoff = 3 * int(CONTRAST_VALUE.split(',')[0])
                 white_cutoff = 3 + 9 * int(CONTRAST_VALUE.split(',')[1])
-                uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
+                uncropped_img = autocontrast_compat(uncropped_img, cutoff=(black_cutoff, white_cutoff))
             elif int(CONTRAST_VALUE) < 0 or int(CONTRAST_VALUE) > 8:
                 pass # value out of range. we'll treat like 0.
             else:
                 black_cutoff = 3 * int(CONTRAST_VALUE)
                 white_cutoff = 3 + 9 * int(CONTRAST_VALUE)
-                uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
+                uncropped_img = autocontrast_compat(uncropped_img, cutoff=(black_cutoff, white_cutoff))
         else:
             # nothing set, so we go with the default value of 4. 
             black_cutoff = 3 * 4    # default, contrast level 4 = 12
             white_cutoff = 3 + 9 * 4    # default, contrast level 4 = 39
-            uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(black_cutoff,white_cutoff), preserve_tone=True)
+            uncropped_img = autocontrast_compat(uncropped_img, cutoff=(black_cutoff, white_cutoff))
             # uncropped_img = ImageOps.autocontrast(uncropped_img, cutoff=(8,35), preserve_tone=True)
 
         # Convert to grayscale
