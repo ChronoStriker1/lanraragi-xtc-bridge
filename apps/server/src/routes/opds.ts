@@ -711,14 +711,14 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
       settings: defaultConversionSettings,
     });
     const fileBuffer = await readFile(artifact.filePath);
+    const fileBytes = new Uint8Array(fileBuffer);
     await artifact.dispose();
 
-    return c.body(fileBuffer, 200, {
-      "content-type": "application/octet-stream",
-      "content-length": String(fileBuffer.byteLength),
-      "content-disposition": `attachment; filename="${artifact.downloadName}"`,
-      "cache-control": "no-store",
-    });
+    c.header("content-type", "application/octet-stream");
+    c.header("content-length", String(fileBytes.byteLength));
+    c.header("content-disposition", `attachment; filename="${artifact.downloadName}"`);
+    c.header("cache-control", "no-store");
+    return c.body(fileBytes);
   };
 
   app.get("/download/:id", handleDownload);
