@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { readFile } from "node:fs/promises";
 import { convertArchiveToXtc } from "../lib/conversion";
 import type { AppConfig } from "../lib/config";
 import { defaultConversionSettings } from "../lib/settings";
-import { streamFileAsResponse } from "../lib/http";
 import type { LanraragiConnectionManager } from "../lib/lanraragi-connection";
 import { opdsDateFromUnix, xmlEscape } from "../lib/xml";
 import type { ArchiveRecord } from "../types";
@@ -517,12 +517,15 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
       archiveId: id,
       settings: defaultConversionSettings,
     });
-    return streamFileAsResponse({
-      filePath: artifact.filePath,
-      downloadName: artifact.downloadName,
-      contentType: "application/octet-stream",
-      onDone: () => {
-        void artifact.dispose();
+    const fileBuffer = await readFile(artifact.filePath);
+    await artifact.dispose();
+
+    return new Response(fileBuffer, {
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": String(fileBuffer.byteLength),
+        "content-disposition": `attachment; filename="${artifact.downloadName}"`,
+        "cache-control": "no-store",
       },
     });
   };
