@@ -18,8 +18,10 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
     python3 \
-    python3-pil \
+    python3-pip \
+    python-is-python3 \
   && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir "Pillow==11.3.0"
 
 COPY apps/server/package.json ./package.json
 RUN bun install --production
