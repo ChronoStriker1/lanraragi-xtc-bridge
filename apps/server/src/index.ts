@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { loadConfig } from "./lib/config";
 import { createDeviceConnectionManager } from "./lib/device-connection";
@@ -22,6 +24,8 @@ const device = createDeviceConnectionManager({
     ? config.DEVICE_SETTINGS_FILE
     : path.resolve(process.cwd(), config.DEVICE_SETTINGS_FILE),
 });
+const webDistRoot = path.resolve(process.cwd(), "../web/dist");
+const hasWebDist = existsSync(path.join(webDistRoot, "index.html"));
 
 const app = new Hono();
 
@@ -37,18 +41,30 @@ app.onError((err, c) => {
   );
 });
 
-app.get("/", (c) =>
-  c.json({
-    name: "lanraragi-xtc-bridge",
-    status: "ok",
-    opds: `${config.SERVER_PUBLIC_URL}/opds`,
-    api: `${config.SERVER_PUBLIC_URL}/api`,
-    logFile: getLogFilePath(),
-  }),
-);
-
 app.route("/api", createApiRouter(config, lanraragi, device));
 app.route("/opds", createOpdsRouter(config, lanraragi));
+
+if (hasWebDist) {
+  app.use("/assets/*", serveStatic({ root: webDistRoot }));
+  app.get("/favicon.ico", serveStatic({ root: webDistRoot }));
+  app.get(
+    "/",
+    serveStatic({
+      root: webDistRoot,
+      rewriteRequestPath: () => "/index.html",
+    }),
+  );
+} else {
+  app.get("/", (c) =>
+    c.json({
+      name: "lanraragi-xtc-bridge",
+      status: "ok",
+      opds: `${config.SERVER_PUBLIC_URL}/opds`,
+      api: `${config.SERVER_PUBLIC_URL}/api`,
+      logFile: getLogFilePath(),
+    }),
+  );
+}
 
 serve(
   {

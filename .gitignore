@@ -14,5 +14,7 @@ xtc_output
 .temp_png
 .tmp
 .runtime
+/data/
+/docker/server.env
 /tools/
 *.tsbuildinfo

@@ -1,0 +1,16 @@
+services:
+  lanraragi-xtc-bridge:
+    container_name: lanraragi-xtc-bridge
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lanraragi-xtc-bridge:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - ./docker/server.env
+    volumes:
+      - ./data/runtime:/app/apps/server/.runtime
+      - ./data/logs:/app/apps/server/logs
+      - ./data/tmp:/app/apps/server/.tmp

@@ -1,0 +1,16 @@
+.git
+.gitignore
+node_modules
+apps/web/node_modules
+apps/server/node_modules
+apps/server/.env
+apps/web/.env
+apps/server/logs
+apps/server/.runtime
+apps/server/.tmp
+data
+dist
+build
+coverage
+*.log
+*.out
