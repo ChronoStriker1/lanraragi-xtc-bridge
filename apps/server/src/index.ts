@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { serve } from "@hono/node-server";
+import { serve as serveNode } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -66,13 +66,25 @@ if (hasWebDist) {
   );
 }
 
-serve(
-  {
+const bunRuntime = (globalThis as { Bun?: { serve: (opts: { fetch: typeof app.fetch; port: number }) => { port: number } } })
+  .Bun;
+
+if (bunRuntime?.serve) {
+  const server = bunRuntime.serve({
     fetch: app.fetch,
     port: config.PORT,
-  },
-  (info) => {
-    logInfo(`lanraragi-xtc-bridge server listening on http://localhost:${info.port}`);
-    logInfo(`log file path: ${getLogFilePath()}`);
-  },
-);
+  });
+  logInfo(`lanraragi-xtc-bridge server listening on http://localhost:${server.port}`);
+  logInfo(`log file path: ${getLogFilePath()}`);
+} else {
+  serveNode(
+    {
+      fetch: app.fetch,
+      port: config.PORT,
+    },
+    (info) => {
+      logInfo(`lanraragi-xtc-bridge server listening on http://localhost:${info.port}`);
+      logInfo(`log file path: ${getLogFilePath()}`);
+    },
+  );
+}
