@@ -23,9 +23,17 @@ const facetQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(10).max(100).default(40),
 });
 
+const titleBrowseQuerySchema = z.object({
+  dir: z.enum(["asc", "desc"]).default("asc"),
+  letter: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(10).max(100).default(30),
+});
+
 const facetNamespaceSchema = z.enum(["artist", "group"]);
 
 const FACET_CACHE_MS = 5 * 60 * 1000;
+const TITLE_CACHE_MS = 15 * 60 * 1000;
 const LETTER_BUCKETS = ["0-9", ...Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), "#"];
 
 type FacetNamespace = z.infer<typeof facetNamespaceSchema>;
@@ -33,6 +41,15 @@ type FacetItem = {
   name: string;
   count: number;
   bucket: string;
+};
+
+type TitleBrowseDir = "asc" | "desc";
+type TitleBucketCache = {
+  at: number;
+  nextStart: number;
+  total: number;
+  done: boolean;
+  buckets: Record<string, ArchiveRecord[]>;
 };
 
 function qs(input: Record<string, string | number | undefined>): string {
@@ -131,6 +148,11 @@ function normalizeBucket(input?: string): string | undefined {
   return undefined;
 }
 
+function titleBucketOrder(dir: TitleBrowseDir): string[] {
+  const letters = Array.from("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  return dir === "desc" ? ["0-9", ...letters.reverse(), "#"] : ["0-9", ...letters, "#"];
+}
+
 async function renderArchiveListFeed(params: {
   config: AppConfig;
   lanraragi: LanraragiConnectionManager;
@@ -218,6 +240,79 @@ async function renderArchiveListFeed(params: {
 export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnectionManager): Hono {
   const app = new Hono();
   const facetCache = new Map<FacetNamespace, { at: number; items: FacetItem[] }>();
+  const titleCacheByDir: Record<TitleBrowseDir, TitleBucketCache | null> = {
+    asc: null,
+    desc: null,
+  };
+
+  const createEmptyTitleBuckets = (): Record<string, ArchiveRecord[]> =>
+    Object.fromEntries(LETTER_BUCKETS.map((bucket) => [bucket, []])) as Record<string, ArchiveRecord[]>;
+
+  const getOrResetTitleCache = (dir: TitleBrowseDir): TitleBucketCache => {
+    const now = Date.now();
+    const existing = titleCacheByDir[dir];
+    if (existing && now - existing.at < TITLE_CACHE_MS) {
+      return existing;
+    }
+    const next: TitleBucketCache = {
+      at: now,
+      nextStart: 0,
+      total: Number.POSITIVE_INFINITY,
+      done: false,
+      buckets: createEmptyTitleBuckets(),
+    };
+    titleCacheByDir[dir] = next;
+    return next;
+  };
+
+  const fillOneTitleChunk = async (dir: TitleBrowseDir): Promise<void> => {
+    const cache = getOrResetTitleCache(dir);
+    if (cache.done) return;
+
+    const result = await lanraragi.getClient().searchArchives({
+      filter: "",
+      start: cache.nextStart,
+      sortby: "title",
+      order: dir,
+    });
+    cache.total = result.recordsFiltered;
+
+    if (!result.data.length) {
+      cache.done = true;
+      cache.at = Date.now();
+      return;
+    }
+
+    for (const arc of result.data) {
+      const name = arc.title || arc.filename || "";
+      const bucket = bucketForFacetName(name);
+      if (!cache.buckets[bucket]) {
+        cache.buckets[bucket] = [];
+      }
+      cache.buckets[bucket].push(arc);
+    }
+
+    cache.nextStart += result.data.length;
+    if (cache.nextStart >= cache.total) {
+      cache.done = true;
+    }
+    cache.at = Date.now();
+  };
+
+  const ensureTitleBucketItems = async (params: {
+    dir: TitleBrowseDir;
+    bucket: string;
+    needed: number;
+  }): Promise<{ items: ArchiveRecord[]; done: boolean }> => {
+    const cache = getOrResetTitleCache(params.dir);
+    while ((cache.buckets[params.bucket]?.length ?? 0) < params.needed && !cache.done) {
+      await fillOneTitleChunk(params.dir);
+    }
+    return {
+      items: cache.buckets[params.bucket] ?? [],
+      done: cache.done,
+    };
+  };
 
   const getFacetItems = async (namespace: FacetNamespace): Promise<FacetItem[]> => {
     const now = Date.now();
@@ -309,23 +404,19 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/nav/title-asc`,
           title: "Titles A-Z",
-          href: `/opds/list${qs({
-            title: "Titles A-Z",
+          href: `/opds/titles${qs({
+            dir: "asc",
             page: 1,
             pageSize: 30,
-            sortby: "title",
-            order: "asc",
           })}`,
         }),
         renderNavigationEntry({
           id: `${baseUrl(config)}/opds/nav/title-desc`,
           title: "Titles Z-A",
-          href: `/opds/list${qs({
-            title: "Titles Z-A",
+          href: `/opds/titles${qs({
+            dir: "desc",
             page: 1,
             pageSize: 30,
-            sortby: "title",
-            order: "desc",
           })}`,
         }),
         renderNavigationEntry({
@@ -364,6 +455,108 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
       sortby: parsed.data.sortby,
       order: parsed.data.order,
       includeHomeLink: true,
+    });
+
+    return c.body(body, 200, {
+      "content-type": "application/atom+xml; charset=utf-8",
+      "cache-control": "no-store",
+    });
+  });
+
+  app.get("/titles", async (c) => {
+    const parsed = titleBrowseQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.text("Invalid query", 400);
+    }
+
+    const dir = parsed.data.dir;
+    const letter = normalizeBucket(parsed.data.letter);
+    const orderLabel = dir === "desc" ? "Z-A" : "A-Z";
+
+    if (!letter) {
+      const entries: string[] = [
+        renderNavigationEntry({
+          id: `${baseUrl(config)}/opds/titles#home`,
+          title: "Back to OPDS Home",
+          href: "/opds",
+        }),
+      ];
+
+      for (const bucket of titleBucketOrder(dir)) {
+        entries.push(
+          renderNavigationEntry({
+            id: `${baseUrl(config)}/opds/titles#${dir}-${bucket}`,
+            title: bucket,
+            href: `/opds/titles${qs({
+              dir,
+              letter: bucket,
+              page: 1,
+              pageSize: parsed.data.pageSize,
+            })}`,
+          }),
+        );
+      }
+
+      const body = renderFeed({
+        id: `${baseUrl(config)}/opds/titles${qs({ dir })}`,
+        title: `Titles ${orderLabel}`,
+        selfHref: `${baseUrl(config)}/opds/titles${qs({ dir })}`,
+        subtitle: "Choose a letter section.",
+        entries,
+      });
+      return c.body(body, 200, {
+        "content-type": "application/atom+xml; charset=utf-8",
+        "cache-control": "no-store",
+      });
+    }
+
+    const page = parsed.data.page;
+    const pageSize = parsed.data.pageSize;
+    const start = (page - 1) * pageSize;
+    const needed = start + pageSize + 1;
+    const { items, done } = await ensureTitleBucketItems({
+      dir,
+      bucket: letter,
+      needed,
+    });
+    const pageItems = items.slice(start, start + pageSize);
+    const hasNext = items.length > start + pageSize || !done;
+
+    const entries: string[] = [
+      renderNavigationEntry({
+        id: `${baseUrl(config)}/opds/titles#letters-${dir}`,
+        title: `Back to Titles ${orderLabel}`,
+        href: `/opds/titles${qs({ dir, page: 1, pageSize })}`,
+      }),
+    ];
+
+    if (page > 1) {
+      entries.push(
+        renderNavigationEntry({
+          id: `${baseUrl(config)}/opds/titles#prev-${dir}-${letter}-${page - 1}`,
+          title: "Previous Page",
+          href: `/opds/titles${qs({ dir, letter, page: page - 1, pageSize })}`,
+        }),
+      );
+    }
+    if (hasNext) {
+      entries.push(
+        renderNavigationEntry({
+          id: `${baseUrl(config)}/opds/titles#next-${dir}-${letter}-${page + 1}`,
+          title: "Next Page",
+          href: `/opds/titles${qs({ dir, letter, page: page + 1, pageSize })}`,
+        }),
+      );
+    }
+
+    entries.push(...pageItems.map((arc) => renderArchiveEntry(config, arc)));
+
+    const body = renderFeed({
+      id: `${baseUrl(config)}/opds/titles${qs({ dir, letter, page, pageSize })}`,
+      title: `Titles ${orderLabel}: ${letter}`,
+      selfHref: `${baseUrl(config)}/opds/titles${qs({ dir, letter, page, pageSize })}`,
+      subtitle: `${orderLabel} order by title. Section ${letter}. Page ${page}.`,
+      entries,
     });
 
     return c.body(body, 200, {
@@ -478,8 +671,8 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
             title: `${titleBase.slice(0, -1)}: ${facet.name}`,
             page: 1,
             pageSize: 30,
-            sortby: "date_added",
-            order: "desc",
+            sortby: "title",
+            order: "asc",
           })}`,
         }),
       );
