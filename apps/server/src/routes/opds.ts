@@ -520,13 +520,11 @@ export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnecti
     const fileBuffer = await readFile(artifact.filePath);
     await artifact.dispose();
 
-    return new Response(fileBuffer, {
-      headers: {
-        "content-type": "application/octet-stream",
-        "content-length": String(fileBuffer.byteLength),
-        "content-disposition": `attachment; filename="${artifact.downloadName}"`,
-        "cache-control": "no-store",
-      },
+    return c.body(fileBuffer, 200, {
+      "content-type": "application/octet-stream",
+      "content-length": String(fileBuffer.byteLength),
+      "content-disposition": `attachment; filename="${artifact.downloadName}"`,
+      "cache-control": "no-store",
     });
   };
 
