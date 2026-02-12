@@ -144,7 +144,7 @@ body {
 }
 
 .app-shell.settings-collapsed {
-  grid-template-columns: 88px minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr);
 }
 
 .settings-pane {
@@ -158,8 +158,9 @@ body {
 }
 
 .settings-pane.collapsed {
-  padding: 0.7rem 0.55rem;
+  padding: 0.5rem 0.35rem;
   overflow: hidden;
+  justify-items: center;
 }
 
 .settings-pane-body.hidden {
@@ -171,19 +172,27 @@ body {
   border-radius: 10px;
   background: linear-gradient(180deg, var(--accent-a), var(--accent-b));
   color: var(--accent-text);
-  padding: 0.5rem 0.65rem;
+  width: 2.5rem;
+  height: 2.2rem;
+  padding: 0;
   font-family: "IBM Plex Mono", monospace;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   cursor: pointer;
 }
 
 .settings-pane.collapsed .settings-toggle-btn {
-  width: 100%;
-  min-height: 110px;
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  transform: rotate(180deg);
-  letter-spacing: 0.04em;
+  width: 2.5rem;
+  height: 2.2rem;
+  min-height: 0;
+  justify-self: center;
+}
+
+.settings-toggle-icon {
+  font-size: 1.15rem;
 }
 
 .settings-pane h1 {
@@ -325,6 +334,23 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
+}
+
+.section-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.section-toggle-btn {
+  font-family: "IBM Plex Mono", monospace;
+  border: 1px solid var(--ghost-border);
+  border-radius: 8px;
+  background: var(--ghost-bg);
+  color: var(--ghost-text);
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
 }
 
 .library-pane {
@@ -582,6 +608,9 @@ body {
   margin-top: 0.35rem;
   display: grid;
   gap: 0.4rem;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 0.2rem;
 }
 
 .batch-job-row {
@@ -671,16 +700,17 @@ body {
 }
 
 .batch-preview-strip {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 0.45rem;
-  overflow-x: auto;
-  padding-bottom: 0.15rem;
+  max-height: 34vh;
+  overflow-y: auto;
+  padding-right: 0.2rem;
 }
 
 .batch-preview-card {
-  min-width: 210px;
-  width: 210px;
-  flex: 0 0 auto;
+  min-width: 0;
+  width: 100%;
 }
 
 .batch-preview-card img {
@@ -915,8 +945,6 @@ body {
   }
 
   .settings-pane.collapsed .settings-toggle-btn {
-    writing-mode: horizontal-tb;
-    transform: none;
     min-height: 0;
   }
 

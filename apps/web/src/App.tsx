@@ -10,9 +10,12 @@ import {
   fetchDeviceFiles,
   fetchDefaults,
   fetchFacets,
+  fetchLanraragiSettings,
   fetchTagSuggestions,
   startConversionJob,
   thumbnailUrl,
+  updateLanraragiSettings,
+  updateDeviceDefaults,
   uploadConversionJob,
 } from "./lib/api";
 import type { ArchiveRecord, ConversionJob, ConversionSettings, DeviceFileEntry } from "./types";
@@ -30,6 +33,9 @@ const SETTINGS_STORAGE_KEY = "xtc_conversion_settings_v1";
 const SORT_STORAGE_KEY = "xtc_sort_options_v1";
 const DEVICE_STORAGE_KEY = "xtc_device_settings_v1";
 const PANEL_STORAGE_KEY = "xtc_settings_panel_collapsed_v1";
+const SERVICE_PANEL_STORAGE_KEY = "xtc_service_panel_collapsed_v1";
+const DEVICE_PANEL_STORAGE_KEY = "xtc_device_panel_collapsed_v1";
+const PUBLIC_BASE_URL_STORAGE_KEY = "xtc_public_base_url_v1";
 const THEME_STORAGE_KEY = "xtc_theme_mode_v1";
 const FACET_PREFIXES = ["ALL", "0-9", ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"] as const;
 const BATCH_MAX_PARALLEL = 4;
@@ -86,6 +92,43 @@ function formatSize(bytes: number): string {
     i += 1;
   }
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function formatElapsed(totalSeconds: number): string {
+  const safe = Number.isFinite(totalSeconds) && totalSeconds > 0 ? Math.floor(totalSeconds) : 0;
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function pageFromFrameLabel(frameLabel: string | null): number | null {
+  if (!frameLabel) return null;
+  const base = frameLabel.replace(/\.[^.]+$/, "");
+  const match = base.match(/\d+/);
+  if (!match) return null;
+  const value = Number(match[0]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function formatJobPageFrameLine(job: ConversionJob): string | null {
+  const totalPages = job.totalPages;
+  if (totalPages <= 0) {
+    return job.convertedFrameVersion > 0 ? `Page ?/? • Frames ${job.convertedFrameVersion}` : null;
+  }
+
+  const parsedFramePage = pageFromFrameLabel(job.currentConvertedFrameLabel);
+  const workingPage =
+    parsedFramePage && parsedFramePage <= totalPages
+      ? parsedFramePage
+      : job.status === "completed"
+        ? totalPages
+        : Math.max(1, Math.min(totalPages, job.completedPages || 1));
+
+  if (job.stage === "cbz2xtc" || job.convertedFrameVersion > 0) {
+    return `Page ${workingPage}/${totalPages} • Frames ${job.convertedFrameVersion}`;
+  }
+
+  return `Pages ${job.completedPages}/${totalPages}`;
 }
 
 function cleanFileNamePart(input: string): string {
@@ -206,6 +249,21 @@ function loadStoredSort(): { sortby: string; order: "asc" | "desc" } {
   }
 }
 
+function loadStoredPublicBaseUrl(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(PUBLIC_BASE_URL_STORAGE_KEY) || "";
+}
+
+function loadServicePanelCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(SERVICE_PANEL_STORAGE_KEY) === "true";
+}
+
+function loadDevicePanelCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(DEVICE_PANEL_STORAGE_KEY) === "true";
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -233,6 +291,24 @@ function normalizeDeviceBaseUrlInput(input: string): string {
   if (!trimmed) {
     throw new Error("Device address is required.");
   }
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const parsed = new URL(withScheme);
+  return `${parsed.protocol}//${parsed.host}`;
+}
+
+function normalizeLanraragiBaseUrlInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error("LANraragi address is required.");
+  }
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const parsed = new URL(withScheme);
+  return `${parsed.protocol}//${parsed.host}`;
+}
+
+function normalizePublicBaseUrlInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   const parsed = new URL(withScheme);
   return `${parsed.protocol}//${parsed.host}`;
@@ -308,11 +384,25 @@ export default function App() {
     return window.localStorage.getItem(PANEL_STORAGE_KEY) === "true";
   });
 
+  const [lanraragiBaseUrl, setLanraragiBaseUrl] = useState("");
+  const [lanraragiApiKey, setLanraragiApiKey] = useState("");
+  const [lanraragiHasApiKey, setLanraragiHasApiKey] = useState(false);
+  const [lanraragiLoading, setLanraragiLoading] = useState(false);
+  const [lanraragiSaving, setLanraragiSaving] = useState(false);
+  const [lanraragiError, setLanraragiError] = useState<string | null>(null);
+  const [lanraragiNotice, setLanraragiNotice] = useState<string | null>(null);
+  const [lanraragiReloadToken, setLanraragiReloadToken] = useState(0);
+  const [servicePanelCollapsed, setServicePanelCollapsed] = useState(() => loadServicePanelCollapsed());
+  const [devicePanelCollapsed, setDevicePanelCollapsed] = useState(() => loadDevicePanelCollapsed());
+  const [publicBaseUrl, setPublicBaseUrl] = useState(() => loadStoredPublicBaseUrl());
+
   const [deviceBaseUrl, setDeviceBaseUrl] = useState("http://xteink.local");
   const [deviceTargetPath, setDeviceTargetPath] = useState("/");
   const [deviceRootDirs, setDeviceRootDirs] = useState<DeviceFileEntry[]>([]);
   const [deviceLoading, setDeviceLoading] = useState(false);
+  const [deviceSaving, setDeviceSaving] = useState(false);
   const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
   const [newDeviceFolderName, setNewDeviceFolderName] = useState("");
 
   const [viewMode, setViewMode] = useState<ViewMode>("library");
@@ -332,10 +422,17 @@ export default function App() {
   }, [viewMode]);
 
   const opdsBaseUrl = useMemo(() => {
+    if (publicBaseUrl.trim()) {
+      try {
+        return `${normalizePublicBaseUrlInput(publicBaseUrl)}/opds`;
+      } catch {
+        // Ignore malformed manual base URL and fall back to computed defaults.
+      }
+    }
     const explicit = import.meta.env.VITE_OPDS_URL as string | undefined;
     if (explicit) return explicit;
     return `${window.location.protocol}//${window.location.hostname}:3000/opds`;
-  }, []);
+  }, [publicBaseUrl]);
 
   const selectedCount = useMemo(() => Object.keys(selectedArchives).length, [selectedArchives]);
   const isBatchRunning = batchState !== null;
@@ -352,6 +449,11 @@ export default function App() {
     [batchJobs],
   );
   const batchRows = useMemo(() => {
+    const orderIndex = new Map<string, number>();
+    batchArchiveOrder.forEach((archiveId, index) => {
+      orderIndex.set(archiveId, index);
+    });
+
     const used = new Set<string>();
     const rows: Array<{
       archiveId: string;
@@ -386,10 +488,17 @@ export default function App() {
     }
 
     return rows.sort((a, b) => {
+      const aOrder = orderIndex.get(a.archiveId);
+      const bOrder = orderIndex.get(b.archiveId);
+      if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+      if (aOrder !== undefined) return -1;
+      if (bOrder !== undefined) return 1;
       if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
       return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
     });
-  }, [batchArchiveTitles, batchJobList, batchUploads]);
+  }, [batchArchiveOrder, batchArchiveTitles, batchJobList, batchUploads]);
   const batchPreviewItems = useMemo(() => {
     const orderIndex = new Map<string, number>();
     batchArchiveOrder.forEach((archiveId, index) => {
@@ -440,6 +549,18 @@ export default function App() {
   }, [settingsPanelCollapsed]);
 
   useEffect(() => {
+    localStorage.setItem(SERVICE_PANEL_STORAGE_KEY, servicePanelCollapsed ? "true" : "false");
+  }, [servicePanelCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(DEVICE_PANEL_STORAGE_KEY, devicePanelCollapsed ? "true" : "false");
+  }, [devicePanelCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(PUBLIC_BASE_URL_STORAGE_KEY, publicBaseUrl);
+  }, [publicBaseUrl]);
+
+  useEffect(() => {
     localStorage.setItem(THEME_STORAGE_KEY, themeMode);
   }, [themeMode]);
 
@@ -477,15 +598,44 @@ export default function App() {
   }, [sortby, order]);
 
   useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      setLanraragiLoading(true);
+      setLanraragiError(null);
+      try {
+        const settings = await fetchLanraragiSettings();
+        if (cancelled) return;
+        setLanraragiBaseUrl(settings.baseUrl);
+        setLanraragiHasApiKey(settings.hasApiKey);
+      } catch (err) {
+        if (cancelled) return;
+        setLanraragiError(err instanceof Error ? err.message : "Failed to load LANraragi connection settings.");
+      } finally {
+        if (!cancelled) {
+          setLanraragiLoading(false);
+        }
+      }
+    };
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const raw = localStorage.getItem(DEVICE_STORAGE_KEY);
+    let hadLocalFallback = false;
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as { baseUrl?: string; path?: string };
         if (parsed.baseUrl) {
           setDeviceBaseUrl(parsed.baseUrl);
+          hadLocalFallback = true;
         }
         if (parsed.path) {
           setDeviceTargetPath(normalizeDevicePath(parsed.path));
+          hadLocalFallback = true;
         }
       } catch {
         // Ignore malformed local settings and continue with server defaults.
@@ -496,11 +646,14 @@ export default function App() {
     const run = async () => {
       try {
         const defaults = await fetchDeviceDefaults();
-        if (cancelled || raw) return;
+        if (cancelled) return;
         setDeviceBaseUrl(defaults.baseUrl);
         setDeviceTargetPath(normalizeDevicePath(defaults.path));
       } catch {
-        // Keep fallback values when defaults endpoint is not reachable.
+        // Keep fallback local values when defaults endpoint is not reachable.
+        if (!hadLocalFallback) {
+          setDeviceError("Could not load saved device defaults. Enter device address and save.");
+        }
       }
     };
 
@@ -563,6 +716,7 @@ export default function App() {
   useEffect(() => {
     if (!activeFacetNamespace || selectedFacet) return;
 
+    let cancelled = false;
     const run = async () => {
       setFacetLoading(true);
       setFacetError(null);
@@ -571,16 +725,23 @@ export default function App() {
           namespace: activeFacetNamespace,
           q: facetSearch,
         });
+        if (cancelled) return;
         setFacetItems(data);
       } catch (err) {
+        if (cancelled) return;
         setFacetError(err instanceof Error ? err.message : "Failed to load facets");
       } finally {
-        setFacetLoading(false);
+        if (!cancelled) {
+          setFacetLoading(false);
+        }
       }
     };
 
     void run();
-  }, [activeFacetNamespace, facetSearch, selectedFacet]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFacetNamespace, facetSearch, selectedFacet, lanraragiReloadToken]);
 
   useEffect(() => {
     setNormalizedFilter(normalizeCommaTerms(filter));
@@ -631,6 +792,7 @@ export default function App() {
   useEffect(() => {
     if (isFacetListView) return;
 
+    let cancelled = false;
     const run = async () => {
       setLoading(true);
       setError(null);
@@ -641,17 +803,24 @@ export default function App() {
           sortby,
           order,
         });
+        if (cancelled) return;
         setArchives(data.data);
         setTotal(data.recordsFiltered);
       } catch (err) {
+        if (cancelled) return;
         setError(err instanceof Error ? err.message : "Failed to load archives");
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
 
     void run();
-  }, [normalizedFilter, start, sortby, order, selectedFacet, isFacetListView]);
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedFilter, start, sortby, order, selectedFacet, isFacetListView, lanraragiReloadToken]);
 
   const canPrev = start > 0;
   const canNext = start + archives.length < total;
@@ -702,21 +871,25 @@ export default function App() {
     if (existing) {
       window.clearInterval(existing);
     }
+    const startedAt = Date.now();
     const timer = window.setInterval(() => {
       setBatchUploads((previous) => {
         const current = previous[archiveId];
         if (!current || current.phase !== "uploading") return previous;
-        const nextProgress = Math.min(94, current.progress + 4);
-        if (nextProgress === current.progress) return previous;
+        const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
+        const nextProgress = Math.max(current.progress, Math.min(99, 8 + Math.floor(elapsedSeconds / 3)));
+        const nextMessage = `Uploading to XTEink (${formatElapsed(elapsedSeconds)})`;
+        if (nextProgress === current.progress && nextMessage === current.message) return previous;
         return {
           ...previous,
           [archiveId]: {
             ...current,
             progress: nextProgress,
+            message: nextMessage,
           },
         };
       });
-    }, 450);
+    }, 1_000);
     uploadTickerRef.current[archiveId] = timer;
   };
 
@@ -731,15 +904,18 @@ export default function App() {
     if (singleUploadTickerRef.current) {
       window.clearInterval(singleUploadTickerRef.current);
     }
+    const startedAt = Date.now();
     const timer = window.setInterval(() => {
       setSingleUpload((current) => {
         if (!current || current.phase !== "uploading") return current;
+        const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
         return {
           ...current,
-          progress: Math.min(94, current.progress + 4),
+          progress: Math.max(current.progress, Math.min(99, 8 + Math.floor(elapsedSeconds / 3))),
+          message: `Uploading converted archive to XTEink (${formatElapsed(elapsedSeconds)})`,
         };
       });
-    }, 450);
+    }, 1_000);
     singleUploadTickerRef.current = timer;
   };
 
@@ -909,7 +1085,7 @@ export default function App() {
             [params.archive.arcid]: {
               phase: "uploading",
               progress: 8,
-              message: "Uploading to XTEink",
+              message: "Uploading to XTEink (00:00)",
             },
           }));
           startBatchUploadTicker(params.archive.arcid);
@@ -1133,7 +1309,7 @@ export default function App() {
         setSingleUpload({
           phase: "uploading",
           progress: 8,
-          message: "Uploading converted archive to XTEink",
+          message: "Uploading converted archive to XTEink (00:00)",
         });
         startSingleUploadTicker();
       }
@@ -1199,6 +1375,58 @@ export default function App() {
     setFacetSearch("");
     setFacetPrefix("ALL");
     setStart(0);
+  };
+
+  const onSaveLanraragiSettings = async () => {
+    setLanraragiError(null);
+    setLanraragiNotice(null);
+    setLanraragiSaving(true);
+    try {
+      const normalizedBaseUrl = normalizeLanraragiBaseUrlInput(lanraragiBaseUrl);
+      const normalizedPublicBaseUrl = normalizePublicBaseUrlInput(publicBaseUrl);
+      const payload: { baseUrl: string; apiKey?: string } = {
+        baseUrl: normalizedBaseUrl,
+      };
+      if (lanraragiApiKey.trim().length > 0) {
+        payload.apiKey = lanraragiApiKey;
+      }
+
+      const settings = await updateLanraragiSettings(payload);
+      setLanraragiBaseUrl(settings.baseUrl);
+      setLanraragiHasApiKey(settings.hasApiKey);
+      setLanraragiApiKey("");
+      setPublicBaseUrl(normalizedPublicBaseUrl);
+      setLanraragiNotice("Service connection settings updated.");
+      setLanraragiReloadToken((current) => current + 1);
+      setServicePanelCollapsed(true);
+      setStart(0);
+    } catch (err) {
+      setLanraragiError(err instanceof Error ? err.message : "Failed to save LANraragi settings.");
+    } finally {
+      setLanraragiSaving(false);
+    }
+  };
+
+  const onSaveDeviceDefaults = async () => {
+    setDeviceError(null);
+    setDeviceNotice(null);
+    setDeviceSaving(true);
+    try {
+      const normalizedBaseUrl = normalizeDeviceBaseUrlInput(deviceBaseUrl);
+      const normalizedPath = normalizeDevicePath(deviceTargetPath);
+      const saved = await updateDeviceDefaults({
+        baseUrl: normalizedBaseUrl,
+        path: normalizedPath,
+      });
+      setDeviceBaseUrl(saved.baseUrl);
+      setDeviceTargetPath(saved.path);
+      setDeviceNotice("Device defaults saved.");
+      setDevicePanelCollapsed(true);
+    } catch (err) {
+      setDeviceError(err instanceof Error ? err.message : "Failed to save device defaults.");
+    } finally {
+      setDeviceSaving(false);
+    }
   };
 
   const refreshDeviceRootFolders = async () => {
@@ -1268,6 +1496,7 @@ export default function App() {
       ? conversionJob.currentConvertedFrameLabel || "Converted frame"
       : conversionJob.currentPagePath
     : null;
+  const conversionPageFrameLine = conversionJob ? formatJobPageFrameLine(conversionJob) : null;
   const batchDoneCount = batchState ? batchState.completed + batchState.failed : 0;
   const batchPercent = batchState && batchState.total > 0 ? Math.round((batchDoneCount / batchState.total) * 100) : 0;
   const batchUploadQueueCount = batchState
@@ -1286,8 +1515,12 @@ export default function App() {
           type="button"
           onClick={() => setSettingsPanelCollapsed((current) => !current)}
           aria-expanded={!settingsPanelCollapsed}
+          aria-label={settingsPanelCollapsed ? "Open settings" : "Close settings"}
+          title={settingsPanelCollapsed ? "Open settings" : "Close settings"}
         >
-          {settingsPanelCollapsed ? "Show settings" : "Hide settings"}
+          <span className="settings-toggle-icon" aria-hidden="true">
+            ☰
+          </span>
         </button>
 
         <div className={`settings-pane-body ${settingsPanelCollapsed ? "hidden" : ""}`}>
@@ -1306,67 +1539,177 @@ export default function App() {
           </label>
         </div>
 
-        <div className="opds-box">
-          <div className="small-label">OPDS Catalog</div>
-          <a href={opdsBaseUrl} target="_blank" rel="noreferrer">
-            {opdsBaseUrl}
-          </a>
+        <div className="opds-box device-box">
+          <div className="section-header-row">
+            <div className="small-label">Service Connection</div>
+            <button
+              className="section-toggle-btn"
+              type="button"
+              onClick={() => setServicePanelCollapsed((current) => !current)}
+              aria-label={servicePanelCollapsed ? "Expand service settings" : "Collapse service settings"}
+            >
+              {servicePanelCollapsed ? "<" : "^"}
+            </button>
+          </div>
+
+          {servicePanelCollapsed ? (
+            <div className="conversion-sub">
+              LANraragi: {lanraragiBaseUrl || "Not set"} • API key: {lanraragiHasApiKey ? "stored" : "not set"}
+              <br />
+              OPDS link: {opdsBaseUrl}
+            </div>
+          ) : (
+            <>
+              <label>
+                LANraragi server address
+                <input
+                  value={lanraragiBaseUrl}
+                  onChange={(e) => setLanraragiBaseUrl(e.target.value)}
+                  onBlur={() => {
+                    try {
+                      setLanraragiBaseUrl(normalizeLanraragiBaseUrlInput(lanraragiBaseUrl));
+                    } catch {
+                      // Keep raw value so user can continue editing.
+                    }
+                  }}
+                  placeholder="http://localhost:3001"
+                />
+              </label>
+              <label>
+                LANraragi API key / password
+                <input
+                  type="password"
+                  value={lanraragiApiKey}
+                  onChange={(e) => setLanraragiApiKey(e.target.value)}
+                  placeholder={lanraragiHasApiKey ? "Stored key exists. Enter new key to replace." : "Enter API key"}
+                />
+              </label>
+              <label>
+                Public base URL (optional)
+                <input
+                  value={publicBaseUrl}
+                  onChange={(e) => setPublicBaseUrl(e.target.value)}
+                  onBlur={() => {
+                    try {
+                      setPublicBaseUrl(normalizePublicBaseUrlInput(publicBaseUrl));
+                    } catch {
+                      // Keep raw value so user can continue editing.
+                    }
+                  }}
+                  placeholder="https://your-domain.example"
+                />
+              </label>
+              <div className="conversion-sub">
+                Stored key: {lanraragiHasApiKey ? "set" : "not set"}
+                {lanraragiApiKey ? " • New key pending save" : ""}
+              </div>
+              <div className="conversion-sub">
+                OPDS link preview:{" "}
+                <a href={opdsBaseUrl} target="_blank" rel="noreferrer">
+                  {opdsBaseUrl}
+                </a>
+              </div>
+              <div className="device-actions">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void onSaveLanraragiSettings();
+                  }}
+                  disabled={lanraragiLoading || lanraragiSaving}
+                >
+                  {lanraragiSaving ? "Saving..." : "Save service settings"}
+                </button>
+              </div>
+            </>
+          )}
+          {lanraragiNotice ? <p className="success">{lanraragiNotice}</p> : null}
+          {lanraragiError ? <p className="error">{lanraragiError}</p> : null}
         </div>
 
         <div className="opds-box device-box">
-          <div className="small-label">XTEink Device</div>
-          <label>
-            Device address
-            <input
-              value={deviceBaseUrl}
-              onChange={(e) => setDeviceBaseUrl(e.target.value)}
-              onBlur={() => {
-                try {
-                  setDeviceBaseUrl(normalizeDeviceBaseUrlInput(deviceBaseUrl));
-                } catch {
-                  // Keep raw value so user can continue editing.
-                }
-              }}
-              placeholder="http://xteink.local"
-            />
-          </label>
-          <label>
-            Upload folder path
-            <input
-              value={deviceTargetPath}
-              onChange={(e) => setDeviceTargetPath(e.target.value)}
-              onBlur={() => setDeviceTargetPath(normalizeDevicePath(deviceTargetPath))}
-              placeholder="/Lanraragi"
-            />
-          </label>
-          <div className="device-actions">
-            <button type="button" onClick={() => void refreshDeviceRootFolders()} disabled={deviceLoading}>
-              {deviceLoading ? "Checking..." : "List root folders"}
+          <div className="section-header-row">
+            <div className="small-label">XTEink Device</div>
+            <button
+              className="section-toggle-btn"
+              type="button"
+              onClick={() => setDevicePanelCollapsed((current) => !current)}
+              aria-label={devicePanelCollapsed ? "Expand XTEink settings" : "Collapse XTEink settings"}
+            >
+              {devicePanelCollapsed ? "<" : "^"}
             </button>
           </div>
-          {deviceRootDirs.length > 0 ? (
-            <div className="device-folder-list">
-              {deviceRootDirs.map((entry) => (
-                <button
-                  key={`root-${entry.name}`}
-                  type="button"
-                  onClick={() => setDeviceTargetPath(joinDevicePath("/", entry.name))}
-                >
-                  /{entry.name}
-                </button>
-              ))}
+          {devicePanelCollapsed ? (
+            <div className="conversion-sub">
+              Device: {deviceBaseUrl || "Not set"}
+              <br />
+              Upload path: {normalizeDevicePath(deviceTargetPath)}
             </div>
-          ) : null}
-          <div className="device-create-row">
-            <input
-              value={newDeviceFolderName}
-              onChange={(e) => setNewDeviceFolderName(e.target.value)}
-              placeholder="New folder in current path"
-            />
-            <button type="button" onClick={() => void onCreateDeviceFolder()} disabled={deviceLoading}>
-              Create
-            </button>
-          </div>
+          ) : (
+            <>
+              <label>
+                Device address
+                <input
+                  value={deviceBaseUrl}
+                  onChange={(e) => setDeviceBaseUrl(e.target.value)}
+                  onBlur={() => {
+                    try {
+                      setDeviceBaseUrl(normalizeDeviceBaseUrlInput(deviceBaseUrl));
+                    } catch {
+                      // Keep raw value so user can continue editing.
+                    }
+                  }}
+                  placeholder="http://xteink.local"
+                />
+              </label>
+              <label>
+                Upload folder path
+                <input
+                  value={deviceTargetPath}
+                  onChange={(e) => setDeviceTargetPath(e.target.value)}
+                  onBlur={() => setDeviceTargetPath(normalizeDevicePath(deviceTargetPath))}
+                  placeholder="/Lanraragi"
+                />
+              </label>
+              <div className="device-actions">
+                <button type="button" onClick={() => void refreshDeviceRootFolders()} disabled={deviceLoading}>
+                  {deviceLoading ? "Checking..." : "List root folders"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void onSaveDeviceDefaults();
+                  }}
+                  disabled={deviceSaving || deviceLoading}
+                >
+                  {deviceSaving ? "Saving..." : "Save device defaults"}
+                </button>
+              </div>
+              {deviceRootDirs.length > 0 ? (
+                <div className="device-folder-list">
+                  {deviceRootDirs.map((entry) => (
+                    <button
+                      key={`root-${entry.name}`}
+                      type="button"
+                      onClick={() => setDeviceTargetPath(joinDevicePath("/", entry.name))}
+                    >
+                      /{entry.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <div className="device-create-row">
+                <input
+                  value={newDeviceFolderName}
+                  onChange={(e) => setNewDeviceFolderName(e.target.value)}
+                  placeholder="New folder in current path"
+                />
+                <button type="button" onClick={() => void onCreateDeviceFolder()} disabled={deviceLoading}>
+                  Create
+                </button>
+              </div>
+            </>
+          )}
+          {deviceNotice ? <p className="success">{deviceNotice}</p> : null}
           {deviceError ? <p className="error">{deviceError}</p> : null}
         </div>
 
@@ -1758,11 +2101,7 @@ export default function App() {
                   <span style={{ width: `${Math.max(2, Math.round(conversionJob.progress * 100))}%` }} />
                 </div>
                 <p className="conversion-message">{conversionJob.message}</p>
-                {conversionJob.totalPages > 0 ? (
-                  <p className="conversion-sub">
-                    Pages {conversionJob.completedPages}/{conversionJob.totalPages}
-                  </p>
-                ) : null}
+                {conversionPageFrameLine ? <p className="conversion-sub">{conversionPageFrameLine}</p> : null}
                 {isCbz2xtcStage && !showingConvertedFrame ? (
                   <p className="conversion-sub">Waiting for first fully converted frame...</p>
                 ) : null}
@@ -1846,15 +2185,9 @@ export default function App() {
                 ) : null}
                 {batchRows.length > 0 ? (
                   <div className="batch-jobs">
-                    {batchRows.slice(0, 10).map((row) => {
+                    {batchRows.map((row) => {
                       const percent = row.job ? Math.round(row.job.progress * 100) : 0;
-                      const pageLine = row.job
-                        ? row.job.totalPages > 0
-                          ? row.job.stage === "cbz2xtc"
-                            ? `Pages ${row.job.completedPages}/${row.job.totalPages} • Frames ${row.job.convertedFrameVersion}`
-                            : `Pages ${row.job.completedPages}/${row.job.totalPages}`
-                          : `Frames ${row.job.convertedFrameVersion}`
-                        : "Pending conversion";
+                      const pageLine = row.job ? formatJobPageFrameLine(row.job) || "Pending conversion" : "Pending conversion";
                       const upload = row.upload;
                       return (
                         <div className="batch-job-row" key={`batch-${row.archiveId}`}>
@@ -1883,9 +2216,6 @@ export default function App() {
                         </div>
                       );
                     })}
-                    {batchRows.length > 10 ? (
-                      <p className="conversion-sub">+{batchRows.length - 10} more jobs</p>
-                    ) : null}
                   </div>
                 ) : null}
               </section>

@@ -9,12 +9,55 @@ export async function fetchDefaults(): Promise<ConversionSettings> {
   return body.settings;
 }
 
+export async function fetchLanraragiSettings(): Promise<{ baseUrl: string; hasApiKey: boolean }> {
+  const response = await fetch("/api/lanraragi/settings");
+  if (!response.ok) {
+    throw new Error(`LANraragi settings request failed (${response.status})`);
+  }
+  const body = (await response.json()) as { settings: { baseUrl: string; hasApiKey: boolean } };
+  return body.settings;
+}
+
+export async function updateLanraragiSettings(params: {
+  baseUrl?: string;
+  apiKey?: string;
+}): Promise<{ baseUrl: string; hasApiKey: boolean }> {
+  const response = await fetch("/api/lanraragi/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LANraragi settings update failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const body = (await response.json()) as { settings: { baseUrl: string; hasApiKey: boolean } };
+  return body.settings;
+}
+
 export async function fetchDeviceDefaults(): Promise<{ baseUrl: string; path: string }> {
   const response = await fetch("/api/device/defaults");
   if (!response.ok) {
     throw new Error(`Device defaults request failed (${response.status})`);
   }
   return (await response.json()) as { baseUrl: string; path: string };
+}
+
+export async function updateDeviceDefaults(params: {
+  baseUrl?: string;
+  path?: string;
+}): Promise<{ baseUrl: string; path: string }> {
+  const response = await fetch("/api/device/settings", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Device defaults update failed (${response.status}): ${text.slice(0, 200)}`);
+  }
+  const body = (await response.json()) as { settings: { baseUrl: string; path: string } };
+  return body.settings;
 }
 
 export async function fetchArchives(params: {

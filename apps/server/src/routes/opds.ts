@@ -4,7 +4,7 @@ import { convertArchiveToXtc } from "../lib/conversion";
 import type { AppConfig } from "../lib/config";
 import { defaultConversionSettings } from "../lib/settings";
 import { streamFileAsResponse } from "../lib/http";
-import { LanraragiClient } from "../lib/lanraragi-client";
+import type { LanraragiConnectionManager } from "../lib/lanraragi-connection";
 import { opdsDateFromUnix, xmlEscape } from "../lib/xml";
 
 const querySchema = z.object({
@@ -25,7 +25,7 @@ function qs(input: Record<string, string | number | undefined>): string {
   return rendered ? `?${rendered}` : "";
 }
 
-export function createOpdsRouter(config: AppConfig, lrr: LanraragiClient): Hono {
+export function createOpdsRouter(config: AppConfig, lanraragi: LanraragiConnectionManager): Hono {
   const app = new Hono();
 
   app.get("/", async (c) => {
@@ -37,7 +37,7 @@ export function createOpdsRouter(config: AppConfig, lrr: LanraragiClient): Hono 
     const { q, page, pageSize, sortby, order } = parsed.data;
     const start = (page - 1) * pageSize;
 
-    const result = await lrr.searchArchives({
+    const result = await lanraragi.getClient().searchArchives({
       filter: q ?? "",
       start,
       sortby,
@@ -99,7 +99,7 @@ export function createOpdsRouter(config: AppConfig, lrr: LanraragiClient): Hono 
 
     const artifact = await convertArchiveToXtc({
       config,
-      lrr,
+      lrr: lanraragi.getClient(),
       archiveId: id,
       settings: defaultConversionSettings,
     });

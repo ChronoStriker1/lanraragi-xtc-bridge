@@ -16,6 +16,43 @@ bun run typecheck
 bun run build
 ```
 
+## Docker (Unraid / Compose)
+
+This repo includes a minimal multi-stage Docker build that:
+
+- Builds the React web UI
+- Runs the API/OPDS backend and serves the built web UI at `/`
+- Bundles Python + Pillow for `cbz2xtc`/`png2xtc`
+
+### 1. Prepare env file
+
+```bash
+cp docker/server.env.example docker/server.env
+```
+
+Edit `docker/server.env`:
+
+- `SERVER_PUBLIC_URL` to your Unraid host URL (e.g. `http://192.168.2.10:3000`)
+- `LANRARAGI_BASE_URL`
+- `LANRARAGI_API_KEY`
+- `XTEINK_BASE_URL`
+
+### 2. Start with compose
+
+```bash
+docker compose up -d --build
+```
+
+### 3. Data persistence
+
+`docker-compose.yml` mounts:
+
+- `./data/runtime` -> device defaults/settings
+- `./data/logs` -> backend logs
+- `./data/tmp` -> conversion workspace
+
+For Unraid, you can point these to `/mnt/user/appdata/...` paths by editing the compose volumes.
+
 ## Stack
 
 - Backend: TypeScript + Hono (Node/Bun compatible)
