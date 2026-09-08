@@ -1,158 +1,104 @@
 # LANraragi XTC Bridge
 
-A Bun-first TypeScript + React project that:
+Browse a LANraragi library and convert archives to XTC files for an XTEink X4 running compatible Crosspoint firmware. The web interface can download converted files or upload them to the reader. An OPDS catalog supports conversion on demand.
 
-- Browses LANraragi archives with cover, title, tags, and summary.
-- Converts selected archives to `.xtc` using `cbz2xtc` settings from a web UI.
-- Exposes an OPDS catalog for XTEink X4 (Crosspoint firmware).
-- Performs conversion on demand and deletes generated files after transfer.
+## How it works
 
-## Bun Quick Commands
+A TypeScript/Hono server connects to LANraragi, serves a React web interface, and runs the bundled Python conversion scripts. By default it retrieves pages through LANraragi and builds a temporary CBZ. It can fall back to downloading ZIP/CBZ archives directly; other archive formats use page extraction.
 
-```bash
-bun install
+The temporary archive is converted by `cbz2xtc.py` and `png2xtc.py`. Output is streamed to the browser, OPDS client, or device and cleaned up afterward. The bridge does not maintain a permanent XTC library.
+
+The UI supports search, sorting, thumbnails, batch conversion, conversion previews, device uploads, and saved conversion defaults.
+
+## Requirements
+
+- A reachable LANraragi server and its API key if authentication is enabled.
+- Docker Compose for container deployment.
+- For local development: Bun, Node.js 20 or later for the `tsx` development server, Python 3.9 or later, and Pillow.
+- For device upload: an XTEink reader with a compatible HTTP file-upload interface enabled and reachable from the bridge.
+
+The repository pins Bun 1.2.0 for packaging. Conversion scripts are included under `tools/`.
+
+## Docker setup
+
+```sh
+git clone https://github.com/ChronoStriker1/lanraragi-xtc-bridge.git
+cd lanraragi-xtc-bridge
+cp docker/server.env.example docker/server.env
+```
+
+Edit `docker/server.env` before starting. Replace the example LANraragi and device addresses with your own:
+
+| Setting | Meaning |
+| --- | --- |
+| `SERVER_PUBLIC_URL` | Bridge URL reachable by your browser and reader, for example `http://bridge.local:3000` |
+| `LANRARAGI_BASE_URL` | LANraragi base URL |
+| `LANRARAGI_API_KEY` | LANraragi API key |
+| `XTEINK_BASE_URL` | Reader's HTTP server URL |
+
+Keep the container paths for `CBZ2XTC_PATH`, `PNG2XTC_PATH`, and `PYTHON_BIN` from the Docker example. A container's `localhost` refers to itself, so use reachable LAN addresses for separate services.
+
+```sh
+docker compose up -d --build
+docker compose logs -f
+```
+
+Open the bridge at port 3000. The OPDS feed is at `http://bridge.local:3000/opds`, using your configured bridge hostname.
+
+Compose stores device settings in `data/runtime`, logs in `data/logs`, and temporary conversion files in `data/tmp`. Change the host volume paths in `docker-compose.yml` if needed. Use `docker compose down` to stop the service.
+
+## Use
+
+1. Open the web interface and confirm the library loads.
+2. Choose conversion settings and try one archive with **Convert and download XTC**.
+3. Open the result on the reader and adjust settings for its display.
+4. For direct transfers, configure the reader URL and destination, then use **Convert and upload to XTEink**.
+5. For OPDS, add the bridge's `/opds` URL in the reader's catalog settings. Downloading an entry starts conversion.
+
+Defaults use overlapping thirds, Floyd-Steinberg dithering, contrast 4, and no margin crop. Advanced settings expose additional converter options.
+
+## Local development
+
+From the repository root:
+
+```sh
+bun install --frozen-lockfile
+python3 -m venv .venv
+.venv/bin/python -m pip install Pillow==11.3.0
+cp apps/server/.env.example apps/server/.env
+```
+
+Set your server and device addresses in `apps/server/.env`. Replace the temporary converter paths in that example with absolute paths inside your clone:
+
+```dotenv
+CBZ2XTC_PATH=/absolute/path/to/lanraragi-xtc-bridge/tools/cbz2xtc/cbz2xtc.py
+PNG2XTC_PATH=/absolute/path/to/lanraragi-xtc-bridge/tools/epub2xtc/png2xtc.py
+PYTHON_BIN=/absolute/path/to/lanraragi-xtc-bridge/.venv/bin/python
+```
+
+```sh
 bun run dev
+```
+
+The development UI is at `http://localhost:5173`, the API at `http://localhost:3000`, and OPDS at `http://localhost:3000/opds`. Set `SERVER_PUBLIC_URL` to a LAN-reachable address if testing with a separate reader.
+
+```sh
 bun run typecheck
 bun run build
 ```
 
-## Docker (Unraid / Compose)
+## Troubleshooting
 
-This repo includes a minimal multi-stage Docker build that:
+- Library unavailable: check `LANRARAGI_BASE_URL`, API key, and `/api/health`.
+- Python or converter not found: verify the three local absolute paths above, or use the Docker-specific paths inside the container.
+- Pillow missing: install it into the interpreter selected by `PYTHON_BIN`.
+- OPDS links use the wrong host: correct `SERVER_PUBLIC_URL` and restart the server.
+- Upload fails: check that the reader's HTTP server is enabled and reachable from the bridge.
+- Incomplete pages: inspect the backend log and LANraragi's extraction results. `USE_LRR_PAGE_EXTRACTION=true` is the default; disabling it makes ZIP/CBZ downloads the first choice.
 
-- Builds the React web UI
-- Runs the API/OPDS backend and serves the built web UI at `/`
-- Bundles Python + Pillow for `cbz2xtc`/`png2xtc`
+Keep the bridge on a trusted network. Its routes expose library access and device operations; the LANraragi API key does not add authentication to the bridge itself.
 
-### 1. Prepare env file
+## Converter credits
 
-```bash
-cp docker/server.env.example docker/server.env
-```
-
-Edit `docker/server.env`:
-
-- `SERVER_PUBLIC_URL` to your Unraid host URL (e.g. `http://192.168.2.10:3000`)
-- `LANRARAGI_BASE_URL`
-- `LANRARAGI_API_KEY`
-- `XTEINK_BASE_URL`
-
-### 2. Start with compose
-
-```bash
-docker compose up -d --build
-```
-
-### 3. Data persistence
-
-`docker-compose.yml` mounts:
-
-- `./data/runtime` -> device defaults/settings
-- `./data/logs` -> backend logs
-- `./data/tmp` -> conversion workspace
-
-For Unraid, you can point these to `/mnt/user/appdata/...` paths by editing the compose volumes.
-
-## Stack
-
-- Backend: TypeScript + Hono (Node/Bun compatible)
-- Frontend: React + Vite + TypeScript
-- Runtime package manager: Bun
-
-## Features
-
-- Archive listing/search/sort via LANraragi `/api/search`
-- Includes `Date` sort using LANraragi `date_added` tag namespace sorting
-- Thumbnail proxy via LANraragi `/api/archives/:id/thumbnail`
-- Manual conversion/download from web UI
-- OPDS feed with pagination + sorting query params (`q`, `page`, `pageSize`, `sortby`, `order`)
-- OPDS download endpoint that auto-converts with default settings
-- Conversion settings mapped to `cbz2xtc.py` flags
-- Basic options UI (xtcjs-style defaults) with optional advanced toggle
-- Cover thumbnail crop toggle (LANraragi-like behavior)
-
-### Archive handling strategy
-
-- Direct-download-first: for `cbz`/`zip`, conversion uses LANraragi `/api/archives/:id/download` directly.
-- Compatibility fallback: for `cbr`, `cb7`, `rar`, `7z` (and other non-cbz), pages are fetched via `/files` + `/page` and packed into a temporary CBZ in memory/disk workspace, then converted.
-- No persistent `.xtc` storage: output is streamed to the client and temp data is deleted after stream close.
-
-## Default conversion profile
-
-The default profile matches `xtcjs` XTEink-focused settings:
-
-- Split mode: `overlap` (overlapping thirds)
-- Dithering: `Floyd-Steinberg`
-- Contrast: `4`
-- Margin crop: `0`
-
-## Requirements
-
-- Bun 1.1+ or Node 20+
-- Python 3.9+
-- `cbz2xtc.py` ([tazua/cbz2xtc](https://github.com/tazua/cbz2xtc))
-- `png2xtc.py` ([jonasdiemer/epub2xtc](https://github.com/jonasdiemer/epub2xtc))
-
-## Upstream Tool Sources
-
-This repository vendors the minimum required conversion scripts under `tools/`:
-
-- `tools/cbz2xtc/cbz2xtc.py` from [tazua/cbz2xtc](https://github.com/tazua/cbz2xtc)
-- `tools/epub2xtc/png2xtc.py` from [jonasdiemer/epub2xtc](https://github.com/jonasdiemer/epub2xtc)
-
-The Docker image and runtime conversion flow rely on these two scripts being present in-repo.
-
-## Setup
-
-### 1. Install dependencies
-
-```bash
-bun install
-```
-
-### 2. Configure server env
-
-```bash
-cp apps/server/.env.example apps/server/.env
-```
-
-Update values in `apps/server/.env`:
-
-- `LANRARAGI_BASE_URL` (example: `http://localhost:3001`)
-- `LANRARAGI_API_KEY` (if your server requires one)
-- `XTEINK_BASE_URL` (example: `http://xteink.local`)
-- `CBZ2XTC_PATH`
-- `PNG2XTC_PATH`
-
-Optional frontend env:
-
-```bash
-cp apps/web/.env.example apps/web/.env
-```
-
-### 3. Run dev
-
-```bash
-bun run dev
-```
-
-- API: `http://localhost:3000`
-- UI: `http://localhost:5173`
-- OPDS: `http://localhost:3000/opds`
-
-## API endpoints
-
-- `GET /api/health`
-- `GET /api/settings/defaults`
-- `GET /api/archives?q=&start=&sortby=&order=`
-- `GET /api/archives/:id`
-- `GET /api/archives/:id/thumbnail`
-- `POST /api/convert/:id`
-- `GET /opds`
-- `GET /opds/download/:id.xtc`
-
-## Validation performed
-
-- Workspace typecheck/build passed.
-- Live LANraragi connectivity validated in a local network test setup.
-- Real conversion test succeeded with temporary artifacts removed after completion.
+- [tazua/cbz2xtc](https://github.com/tazua/cbz2xtc), vendored in `tools/cbz2xtc/`.
+- [jonasdiemer/epub2xtc](https://github.com/jonasdiemer/epub2xtc), with `png2xtc.py` vendored in `tools/epub2xtc/`.
